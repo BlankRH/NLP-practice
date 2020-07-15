@@ -44,18 +44,18 @@ def get_lexicon(file_name):
                         lexicon[token2] = cnt
                         cnt += 1
 
-    np.save('lexicon.npy', lexicon) 
+    np.save('param\\lexicon.npy', lexicon) 
     return lexicon
 
 def n_gram_extractor(file_name):
 
     MARK = np.zeros(1)
     try:
-        MARK[0] = np.loadtxt("m.txt", dtype=int)
+        MARK[0] = np.loadtxt("param\\m.txt", dtype=int)
     except:
         pass
     try:
-        lexicon = np.load('lexicon.npy', allow_pickle=True).item()
+        lexicon = np.load('param\\lexicon.npy', allow_pickle=True).item()
     except:
         lexicon = get_lexicon(file_name)
     Y = np.zeros((MAX_ROW_NUM, 1))
@@ -92,19 +92,24 @@ def n_gram_extractor(file_name):
                     X[row_idx%MAX_ROW_NUM][lexicon[word]] = 1
                     X[row_idx%MAX_ROW_NUM][lexicon[token1]] = 1
                     X[row_idx%MAX_ROW_NUM][lexicon[token2]] = 1
+                    X[row_idx%MAX_ROW_NUM][0] = 1
 
                 Y[row_idx%MAX_ROW_NUM][0] = int(row[3])
                 if row_idx % MAX_ROW_NUM == 0:
-                    np.savetxt("m.txt", MARK, fmt="%d")          
+                    np.savetxt("param\\m.txt", MARK, fmt="%d")          
                     yield X, Y
                     X = np.zeros((MAX_ROW_NUM, len(lexicon)))
                     Y = np.zeros((MAX_ROW_NUM, 1))
             MARK = np.zeros(1)
-            np.savetxt("m.txt", MARK, fmt="%d")
+            np.savetxt("param\\m.txt", MARK, fmt="%d")
             yield X, Y
 
 def sigmoid(z):
-        return 1 / (1+np.exp(-z))
+    return 1 / (1+np.exp(-z))
+
+def softmax(z):
+    z -= np.max(z) #稳定数值
+    return np.exp(z) / np.sum(np.exp(z), axis=1).reshape((z.shape[0], 1))
 
 class LogisticPredictor(object):
 
@@ -114,7 +119,6 @@ class LogisticPredictor(object):
         self.num_train = self.X_train.shape[0]
         self.num_feature = self.X_train.shape[1]
         self.w = np.zeros((CLASS_NUM, self.num_feature, 1))
-        self.b = np.zeros(CLASS_NUM)
 
     def read_new_train(self):
         self.X_train, self.Y_train = next(self.generator)
@@ -125,14 +129,11 @@ class LogisticPredictor(object):
 
     def propagate(self, X, Y, num):
         W = self.w[num]
-        b = self.b[num]
-        y_hat = sigmoid(np.dot(X, W) + b)       
+        y_hat = sigmoid(np.dot(X, W))       
         cost = -(np.sum(Y*np.log(y_hat)+(1-Y)*np.log(1-y_hat))) / self.num_train      
         dZ = y_hat - Y
         dw = np.dot(X.T, dZ) / self.num_train
-        db = np.sum(dZ) / self.num_train
-        grads = {'dw': dw, 'db': db}
-        return grads, cost
+        return dw, cost
 
     def optimize(self, num, num_iterations, learning_rate, print_cost=False):
         X = self.X_train
@@ -143,11 +144,8 @@ class LogisticPredictor(object):
             else:
                 Y[i] = 1
         for i in range(num_iterations):
-            grads, cost = self.propagate(X, Y, num)
-            dw = grads['dw']
-            db = grads['db']
+            dw, cost = self.propagate(X, Y, num)
             self.w[num] = self.w[num] - learning_rate*dw
-            self.b[num] = self.b[num] - learning_rate*db
             if i % 100 == 0:
                 if print_cost:
                     print ("Cost after iteration %i for classifier %i: %f" %(i, num, cost))
@@ -155,7 +153,7 @@ class LogisticPredictor(object):
     def predict(self, X, num):
         m = self.num_feature
         Y_pred = np.zeros((1, m))
-        y_hat = sigmoid(np.dot(X, self.w[num])+self.b[num])
+        y_hat = sigmoid(np.dot(X, self.w[num]))
         pred = []
         for y in y_hat[:,0:1]:
             pred.append(y[0])
@@ -174,19 +172,15 @@ class LogisticPredictor(object):
             if prediction_train[i] != self.Y_train[i][0]:
                 cmp_res[i] = 1
         accuracy_train = 1 - np.mean(cmp_res)
-        #print("Accuracy on train set:", accuracy_train)
         if save:         
             for i in range(CLASS_NUM):
-                np.savetxt('w'+str(i)+'.txt', self.w[i])
-            np.savetxt('b.txt', self.b)
+                np.savetxt('param\\w'+str(i)+'.txt', self.w[i])
         return accuracy_train
 
     def load_parameter(self):
         self.w = np.zeros((CLASS_NUM, self.num_feature, 1))
-        self.b = np.zeros(CLASS_NUM)
         for i in range(CLASS_NUM):
-            self.w[i] = np.loadtxt('w'+str(i)+'.txt') .reshape((self.num_feature, 1))
-        self.b = np.loadtxt("b.txt")
+            self.w[i] = np.loadtxt('param\\w'+str(i)+'.txt') .reshape((self.num_feature, 1))
 
 
     def test(self, X, Y):       
@@ -203,24 +197,95 @@ class LogisticPredictor(object):
 
         accuracy_test = 1 - np.mean(cmp_res)
         print("Accuracy on test set:", accuracy_test)
-        d = {'w': self.w, 'b': self.b}
+        return accuracy_test
+
+class SoftmaxPredictor(object):
+
+    def __init__(self, train_file):
+        self.generator = n_gram_extractor('train.tsv')
+        self.X_train, self.Y_train = next(self.generator)
+        self.num_train = self.X_train.shape[0]
+        self.num_feature = self.X_train.shape[1]
+        self.w = np.zeros((self.num_feature, CLASS_NUM))
+
+    def read_new_train(self):
+        self.X_train, self.Y_train = next(self.generator)
+        self.num_train = self.X_train.shape[0]
+        self.num_feature = self.X_train.shape[1]
+        while(self.w.shape[0] != self.num_feature):
+            self.w = np.insert(self.w, -1, values=0, axis=1)
+
+    def propagate(self, X, Y):
+        W = self.w
+        y_hat = softmax(np.dot(X, W))   
+        dZ = y_hat - Y
+        dw = np.dot(X.T, dZ) / self.num_train
+        return dw
+
+    def optimize(self, num_iterations, learning_rate, print_cost=False):
+        X = self.X_train
+        Y = np.zeros((self.num_train, CLASS_NUM))
+        for i in range(self.num_train):
+            Y[i][int(self.Y_train[i][0])] = 1.0
+        for i in range(num_iterations):
+            dw = self.propagate(X, Y)
+            self.w -= learning_rate*dw
+
+    def predict(self, X):
+        m = self.num_feature
+        Y_pred = np.zeros((1, m))
+        y_hat = softmax(np.dot(X, self.w))
+        return np.argmax(y_hat, axis=1)
+
+    def train(self, learning_rate=0.1, num_iterations=1000, print_cost=False, save=True):
+        X = self.X_train
+        self.optimize(num_iterations, learning_rate, print_cost)
+        print("Finished optimization")
+        prediction_train = self.predict(X)
+        cmp_res = np.zeros(len(prediction_train))
+        for i in range(len(prediction_train)):
+            if prediction_train[i] != self.Y_train[i][0]:
+                cmp_res[i] = 1
+        accuracy_train = 1 - np.mean(cmp_res)
+        #print("Accuracy on train set:", accuracy_train)
+        if save:         
+            np.savetxt('param\\wS.txt', self.w)
+        return accuracy_train
+
+    def load_parameter(self):
+        self.w = np.loadtxt('param\\wS.txt') .reshape((self.num_feature, CLASS_NUM))
+
+    def test(self, X, Y):       
+        prediction_test = self.predict(X)
+        cmp_res = np.zeros(len(prediction_test))
+        for i in range(len(prediction_test)):
+            if prediction_test[i] != Y[i]:
+                cmp_res[i] = 1
+
+        accuracy_test = 1 - np.mean(cmp_res)
+        print("Accuracy on test set:", accuracy_test)
         return accuracy_test
 
 if __name__ == '__main__':
 
     #get_lexicon('train.tsv')
 
-    model = LogisticPredictor('train.tsv')
-    model.load_parameter()
+    models = SoftmaxPredictor('train.tsv')
+    modell = LogisticPredictor('train.tsv')
+
+    models.load_parameter()
+    modell.load_parameter()
 
     '''
     for i in range(11):
-        acc = model.train(learning_rate=0.1, num_iterations=200, print_cost=False, save=True)
+        acc = model.train(learning_rate=0.05, num_iterations=200, print_cost=False, save=True)
         model.read_new_train()
         print("Accuracy on train set %i: %f" %(i, acc))
     '''
     
+    
     #print("Finished loading")
     #print(model.w)
-    X_test, Y_test = next(model.generator)
-    model.test(X_test, Y_test)
+    X_test, Y_test = next(models.generator)
+    models.test(X_test, Y_test)
+    modell.test(X_test, Y_test)
